@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment variables (CRITICAL: Never commit API keys)
+.env
+.env*.local
+.env.development
+.env.production
+
+# Vercel output and cache
+.vercel/
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,6 @@
+# Robots.txt for https://miwebpropia.com
+User-agent: *
+Allow: /
+
+# Sitemap Index
+Sitemap: https://miwebpropia.com/sitemap.xml

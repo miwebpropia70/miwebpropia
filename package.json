@@ -1,0 +1,18 @@
+{
+  "name": "miwebpropia-site",
+  "version": "1.0.0",
+  "description": "Portfolio SPA & AI Agent Agency para miwebpropia.com",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seo": "node scripts/generate-seo.js"
+  },
+  "keywords": [
+    "ai-agents",
+    "chatbots",
+    "web-development",
+    "miwebpropia"
+  ],
+  "author": "miwebpropia.com",
+  "license": "MIT"
+}
