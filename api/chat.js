@@ -124,67 +124,57 @@ async function handleChatRequest(req, res) {
   // 2. If Gemini API key is present
   if (geminiApiKey) {
     try {
-      // Usamos el endpoint oficial de Gemini (compatible con gemini-1.5-flash y gemini-2.0-flash)
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey.trim()}`;
+      const cleanKey = geminiApiKey.trim();
       
-      const contents = [
-        ...chatHistory.slice(-4).map(h => ({
-          role: h.role === 'user' ? 'user' : 'model',
-          parts: [{ text: h.text }]
-        })),
-        {
-          role: 'user',
-          parts: [{ text: userMessage }]
-        }
+      // Lista de modelos oficiales disponibles en Google AI Studio por orden de preferencia
+      const modelsToTry = [
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro'
       ];
 
-      const requestBody = {
-        systemInstruction: {
-          parts: [{ text: SYSTEM_PROMPT }]
-        },
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 500
-        }
-      };
+      let lastErrorText = '';
 
-      const geminiRes = await fetch(geminiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-
-      if (!geminiRes.ok) {
-        const errText = await geminiRes.text();
-        console.error('[Gemini Error HTTP]:', geminiRes.status, errText);
+      for (const modelName of modelsToTry) {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
         
-        // Intento de fallback si el modelo flash con systemInstruction necesita estructura simple
-        const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey.trim()}`;
-        const simpleRes = await fetch(fallbackUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              role: 'user',
-              parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del usuario: ${userMessage}` }]
-            }]
-          })
-        });
+        try {
+          const geminiRes = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                role: 'user',
+                parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del cliente: ${userMessage}` }]
+              }],
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 600
+              }
+            })
+          });
 
-        if (simpleRes.ok) {
-          const sData = await simpleRes.json();
-          const reply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (reply) return sendJson(res, 200, { reply, provider: 'gemini' });
+          if (geminiRes.ok) {
+            const gData = await geminiRes.json();
+            const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (reply) {
+              return sendJson(res, 200, { reply, provider: 'gemini', model: modelName });
+            }
+          } else {
+            lastErrorText = await geminiRes.text();
+            console.error(`[Gemini ${modelName} Error HTTP ${geminiRes.status}]:`, lastErrorText);
+          }
+        } catch (fetchErr) {
+          lastErrorText = fetchErr.message;
         }
-
-        return sendJson(res, 502, { error: 'Error al comunicarse con Gemini.', details: errText });
       }
 
-      const gData = await geminiRes.json();
-      const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text || 'No se obtuvo respuesta de Gemini.';
-
-      return sendJson(res, 200, { reply, provider: 'gemini' });
+      // Si todos los modelos fallaron con la clave proporcionada
+      return sendJson(res, 502, { 
+        error: 'Google Gemini rechazó la petición.', 
+        details: lastErrorText 
+      });
     } catch (err) {
       console.error('[Gemini Exception]:', err);
       return sendJson(res, 500, { error: 'Error interno en conexión con Gemini.', message: err.message });
