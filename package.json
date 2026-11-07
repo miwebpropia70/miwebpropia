@@ -14,5 +14,8 @@
     "miwebpropia"
   ],
   "author": "miwebpropia.com",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@vercel/speed-insights": "^2.1.0"
+  }
 }
