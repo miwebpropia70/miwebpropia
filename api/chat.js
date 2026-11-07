@@ -38,6 +38,49 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+// Caché de modelos disponibles (se reutiliza mientras la función siga activa)
+let cachedGeminiModels = null;
+
+/**
+ * Pregunta a Google qué modelos de texto permite la clave y los ordena por preferencia.
+ * Si existe la variable GEMINI_MODEL (ej. "gemini-2.5-flash"), se prueba primero.
+ */
+async function getGeminiModels(apiKey) {
+  if (cachedGeminiModels) return cachedGeminiModels;
+
+  const listRes = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${apiKey}`
+  );
+  if (!listRes.ok) {
+    throw new Error(`HTTP ${listRes.status} ${await listRes.text()}`);
+  }
+
+  const data = await listRes.json();
+  const excluded = /(embedding|aqa|imagen|image|tts|audio|live|veo|vision|learnlm|gemma|robotics|computer-use)/i;
+
+  const names = (data.models || [])
+    .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map(m => m.name) // formato "models/gemini-x-flash"
+    .filter(name => name.includes('gemini') && !excluded.test(name));
+
+  // Preferencia: flash estable > flash preview > pro estable > resto
+  const score = name => {
+    let s = 0;
+    if (name.includes('flash')) s += 100;
+    if (name.includes('lite')) s -= 10;
+    if (!/(preview|exp|experimental)/i.test(name)) s += 50;
+    if (name.includes('latest')) s += 5;
+    return s;
+  };
+  names.sort((a, b) => score(b) - score(a));
+
+  const preferred = process.env.GEMINI_MODEL ? `models/${process.env.GEMINI_MODEL.replace(/^models\//, '')}` : null;
+  const ordered = preferred ? [preferred, ...names.filter(n => n !== preferred)] : names;
+
+  cachedGeminiModels = ordered;
+  return ordered;
+}
+
 async function handleChatRequest(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -125,49 +168,75 @@ async function handleChatRequest(req, res) {
   if (geminiApiKey) {
     try {
       const cleanKey = geminiApiKey.trim();
-      
-      // En v1beta los nombres válidos son gemini-2.5-flash, gemini-2.0-flash o gemini-1.5-flash
-      // Además añadimos la API v1 estándar que es la más compatible
-      const endpointsToTry = [
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
-        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${cleanKey}`
+
+      // Descubre qué modelos permite realmente esta clave (en vez de adivinar nombres)
+      let models;
+      try {
+        models = await getGeminiModels(cleanKey);
+      } catch (listErr) {
+        return sendJson(res, 502, {
+          error: 'No se pudo obtener la lista de modelos de Gemini (revisa la clave GEMINI_API_KEY).',
+          details: listErr.message
+        });
+      }
+
+      if (models.length === 0) {
+        return sendJson(res, 502, {
+          error: 'Tu clave de Gemini no tiene ningún modelo disponible para generar texto.'
+        });
+      }
+
+      // Historial reciente + pregunta actual
+      const contents = [
+        ...chatHistory.slice(-6, -1).map(h => ({
+          role: h.role === 'user' ? 'user' : 'model',
+          parts: [{ text: String(h.text || '') }]
+        })),
+        { role: 'user', parts: [{ text: userMessage }] }
       ];
 
-      let lastErrorText = '';
+      const errors = [];
 
-      for (const geminiUrl of endpointsToTry) {
+      // Prueba como máximo 3 modelos para no superar el tiempo límite
+      for (const modelName of models.slice(0, 3)) {
         try {
-          const geminiRes = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{
-                role: 'user',
-                parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del cliente: ${userMessage}` }]
-              }]
-            })
-          });
+          const geminiRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${cleanKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                contents,
+                generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
+              })
+            }
+          );
 
           if (geminiRes.ok) {
             const gData = await geminiRes.json();
-            const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text;
+            const reply = gData.candidates?.[0]?.content?.parts
+              ?.map(p => p.text || '')
+              .join('')
+              .trim();
             if (reply) {
-              return sendJson(res, 200, { reply, provider: 'gemini' });
+              return sendJson(res, 200, { reply, provider: 'gemini', model: modelName });
             }
+            errors.push(`${modelName}: respuesta vacía`);
           } else {
-            lastErrorText = await geminiRes.text();
+            errors.push(`${modelName}: HTTP ${geminiRes.status} ${await geminiRes.text()}`);
+            // Si el modelo dejó de existir, lo quitamos de la caché
+            if (geminiRes.status === 404) cachedGeminiModels = null;
           }
         } catch (fetchErr) {
-          lastErrorText = fetchErr.message;
+          errors.push(`${modelName}: ${fetchErr.message}`);
         }
       }
 
-      return sendJson(res, 502, { 
-        error: 'Google Gemini rechazó la petición.', 
-        details: lastErrorText 
+      console.error('[Gemini Errors]:', errors);
+      return sendJson(res, 502, {
+        error: 'Google Gemini rechazó la petición.',
+        details: errors.join('\n\n')
       });
     } catch (err) {
       console.error('[Gemini Exception]:', err);
