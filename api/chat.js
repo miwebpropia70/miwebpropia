@@ -22,12 +22,15 @@ CATÁLOGO EXCLUSIVO DE NUESTROS PRODUCTOS Y SERVICIOS:
    - Consultoría estratégica para empresas en fase de crecimiento.
    - Modelado de bases de datos y APIs limpias para facilitar saltos seguros a sistemas como SAP u otros ERPs.
 
-REGLAS ESTRICTAS DE RESPUESTA:
-- ENFOQUE 100% EN MIWEBPROPIA.COM: Habla siempre en primera persona del plural ("nosotros desarrollamos", "en miwebpropia.com creamos", "nuestras soluciones").
-- PROHIBIDO RECOMENDAR O MENCIONAR COMPETENCIA: Jamás recomiendes plataformas de terceros, herramientas de la competencia ni soluciones genéricas externas (como Wix, WordPress, ManyChat, otras agencias, etc.). Si el usuario pregunta por alternativas genéricas o competidores, explica cortésmente por qué en miwebpropia.com ofrecemos una solución a medida, superior, más rápida y adaptada a sus objetivos comerciales.
-- LLAMADA A LA ACCIÓN (CTA) CONSTANTE: En cada respuesta, invita amablemente al usuario a agendar una llamada de diagnóstico gratuita de 20 minutos o a dejar sus datos en el formulario de la página para prepararle una propuesta sin compromiso.
-- TONO Y ESTILO: Profesional, cercano, persuasivo, seguro y directo. No prometas tiempos de respuesta absolutos o irreales.
-- IDIOMA: Responde siempre en el idioma que use el usuario (por defecto español).`;
+REGLAS DE RESPUESTA (en este orden de prioridad):
+1. RESPONDE A LO QUE TE PREGUNTAN: Lee la pregunta concreta del usuario y contéstala de forma directa en la primera frase. No cambies de tema ni recites el catálogo completo si no te lo piden. Ten en cuenta lo que se ha hablado antes en la conversación.
+2. BREVEDAD: Entre 2 y 5 frases (máximo unas 90 palabras). Usa una lista corta solo si ayuda. Nada de introducciones de relleno ni repetir el saludo.
+3. ENFOQUE 100% EN MIWEBPROPIA.COM: Habla en primera persona del plural ("en miwebpropia.com creamos", "nuestras soluciones"). Relaciona la respuesta con el servicio nuestro que mejor encaje.
+4. SIN COMPETENCIA: Nunca recomiendes ni nombres plataformas, herramientas o agencias de terceros (Wix, WordPress, ManyChat, etc.). Si preguntan por alternativas, explica brevemente la ventaja de nuestra solución a medida.
+5. SIN INVENTAR: No inventes precios, plazos, clientes, casos de éxito ni garantías. Si preguntan por precios o plazos, explica que dependen del proyecto y que se concretan en la llamada de diagnóstico.
+6. TEMAS AJENOS: Si la pregunta no tiene relación con nuestros servicios, dilo con amabilidad en una frase y redirige a cómo podemos ayudar a su negocio.
+7. LLAMADA A LA ACCIÓN: Cierra invitando a agendar la llamada de diagnóstico gratuita o a dejar sus datos en el formulario, pero solo cuando encaje de forma natural (no en cada mensaje si el usuario solo está preguntando detalles).
+8. IDIOMA: Responde en el idioma del usuario (por defecto español). Tono profesional, cercano y seguro.`;
 
 function sendJson(res, statusCode, payload) {
   if (typeof res.status === 'function' && typeof res.json === 'function') {
@@ -186,14 +189,28 @@ async function handleChatRequest(req, res) {
         });
       }
 
-      // Historial reciente + pregunta actual
-      const contents = [
-        ...chatHistory.slice(-6, -1).map(h => ({
-          role: h.role === 'user' ? 'user' : 'model',
-          parts: [{ text: String(h.text || '') }]
-        })),
-        { role: 'user', parts: [{ text: userMessage }] }
-      ];
+      // Historial reciente: solo turnos válidos, alternando usuario/modelo y empezando por el usuario
+      const turns = chatHistory
+        .slice(0, -1) // el último elemento es la pregunta actual
+        .filter(h => h && typeof h.text === 'string' && h.text.trim() && !h.fallback)
+        .slice(-8)
+        .map(h => ({ role: h.role === 'user' ? 'user' : 'model', parts: [{ text: h.text.slice(0, 2000) }] }));
+
+      const contents = [];
+      for (const t of turns) {
+        if (contents.length === 0 && t.role !== 'user') continue;
+        if (contents.length && contents[contents.length - 1].role === t.role) {
+          // une dos turnos seguidos del mismo rol en vez de perder uno
+          contents[contents.length - 1].parts[0].text += `\n${t.parts[0].text}`;
+        } else {
+          contents.push(t);
+        }
+      }
+      const currentQuestion = { role: 'user', parts: [{ text: userMessage }] };
+      if (contents.length && contents[contents.length - 1].role === 'user') {
+        currentQuestion.parts[0].text = `${contents.pop().parts[0].text}\n${userMessage}`;
+      }
+      contents.push(currentQuestion);
 
       const errors = [];
 
@@ -208,7 +225,8 @@ async function handleChatRequest(req, res) {
               body: JSON.stringify({
                 systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
                 contents,
-                generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
+                // Margen amplio: los modelos con "razonamiento" consumen tokens antes de responder
+                generationConfig: { temperature: 0.4, maxOutputTokens: 4096 }
               })
             }
           );

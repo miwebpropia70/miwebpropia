@@ -66,6 +66,40 @@
     return typingElem;
   }
 
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Convierte el Markdown básico de la IA (negritas, cursivas, listas) en HTML seguro
+  function renderMarkdown(text) {
+    const lines = escapeHtml(text).split(/\r?\n/);
+    let html = '';
+    let inList = false;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      const item = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+      if (item) {
+        if (!inList) { html += '<ul class="list-disc pl-5 my-1 space-y-0.5">'; inList = true; }
+        html += `<li>${item[1]}</li>`;
+        continue;
+      }
+      if (inList) { html += '</ul>'; inList = false; }
+      if (line) html += `<p class="my-1">${line}</p>`;
+    }
+    if (inList) html += '</ul>';
+
+    return html
+      .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white">$1</strong>')
+      .replace(/(^|[^*])\*(?!\s)(.+?)\*/g, '$1<em>$2</em>')
+      .replace(/^#+\s*/gm, '');
+  }
+
   function addMessage(sender, text) {
     const msgWrapper = document.createElement('div');
     const isUser = sender === 'user';
@@ -96,7 +130,7 @@
     if (!cleanQuery) return;
 
     // Add user message to UI & history
-    addMessage('user', cleanQuery);
+    addMessage('user', escapeHtml(cleanQuery));
     conversationHistory.push({ role: 'user', text: cleanQuery });
     chatInput.value = '';
 
@@ -104,9 +138,9 @@
     const typing = showTypingIndicator();
 
     try {
-      // 1. Try real backend API
+      // 1. Real backend API (margen amplio: los modelos con razonamiento pueden tardar)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -126,7 +160,7 @@
 
       if (response.ok && data.reply) {
         typing.remove();
-        addMessage('agent', data.reply);
+        addMessage('agent', renderMarkdown(data.reply));
         conversationHistory.push({ role: 'agent', text: data.reply });
         return;
       }
@@ -138,26 +172,13 @@
       }
       throw new Error(data.error || `HTTP ${response.status}`);
     } catch (err) {
-      console.error('[Chatbot Error, using fallback]:', err);
-      // 2. Intelligent local fallback if backend is offline or static hosting
+      console.error('[Chatbot Error]:', err);
+      // 2. Fallo puntual: aviso honesto (no respuestas genéricas que confundan la conversación)
       typing.remove();
-      const lower = cleanQuery.toLowerCase();
-      let fallbackReply = aiResponses.default;
-
-      if (lower.includes('whatsapp') || lower.includes('bot') || lower.includes('chatbot') || lower.includes('agente')) {
-        fallbackReply = aiResponses.whatsapp;
-      } else if (lower.includes('ahorr') || lower.includes('hora') || lower.includes('tiempo') || lower.includes('coste') || lower.includes('precio')) {
-        fallbackReply = aiResponses.ahorro;
-      } else if (lower.includes('web') || lower.includes('velocidad') || lower.includes('rapida') || lower.includes('lenta') || lower.includes('app')) {
-        fallbackReply = aiResponses.velocidad;
-      } else if (lower.includes('sap') || lower.includes('enterprise') || lower.includes('empresa') || lower.includes('erp')) {
-        fallbackReply = aiResponses.sap;
-      } else if (lower.includes('agenda') || lower.includes('reunion') || lower.includes('contacto') || lower.includes('llamada')) {
-        fallbackReply = aiResponses.agendar;
-      }
-
-      addMessage('agent', fallbackReply);
-      conversationHistory.push({ role: 'agent', text: fallbackReply });
+      const errorReply = 'Ahora mismo no he podido procesar tu mensaje. ¿Puedes repetirlo en unos segundos? Si lo prefieres, déjanos tus datos en el formulario de contacto y te escribimos nosotros.';
+      addMessage('agent', errorReply);
+      // Se marca como "fallback" para que el servidor no lo use como contexto
+      conversationHistory.push({ role: 'agent', text: errorReply, fallback: true });
     }
   }
 
