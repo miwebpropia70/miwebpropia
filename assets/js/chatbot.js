@@ -122,16 +122,20 @@
 
       clearTimeout(timeoutId);
 
-      if (response.ok) {
-        const data = await response.json();
+      const data = await response.json();
+
+      if (response.ok && data.reply) {
         typing.remove();
-        const replyText = data.reply || 'Recibido.';
-        addMessage('agent', replyText);
-        conversationHistory.push({ role: 'agent', text: replyText });
+        addMessage('agent', data.reply);
+        conversationHistory.push({ role: 'agent', text: data.reply });
         return;
       }
-      throw new Error(`API status ${response.status}`);
+      
+      // Si la API devolvió error específico (por ejemplo problema con la clave en Vercel)
+      console.warn('[Chatbot API Error Response]:', data);
+      throw new Error(data.error || `HTTP ${response.status}`);
     } catch (err) {
+      console.error('[Chatbot Error, using fallback]:', err);
       // 2. Intelligent local fallback if backend is offline or static hosting
       typing.remove();
       const lower = cleanQuery.toLowerCase();
