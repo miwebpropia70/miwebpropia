@@ -111,33 +111,70 @@ async function handleChatRequest(req, res) {
   // 2. If Gemini API key is present
   if (geminiApiKey) {
     try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`;
+      // Usamos el endpoint oficial de Gemini (compatible con gemini-1.5-flash y gemini-2.0-flash)
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey.trim()}`;
+      
       const contents = [
+        ...chatHistory.slice(-4).map(h => ({
+          role: h.role === 'user' ? 'user' : 'model',
+          parts: [{ text: h.text }]
+        })),
         {
           role: 'user',
-          parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del cliente: ${userMessage}` }]
+          parts: [{ text: userMessage }]
         }
       ];
+
+      const requestBody = {
+        systemInstruction: {
+          parts: [{ text: SYSTEM_PROMPT }]
+        },
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 500
+        }
+      };
 
       const geminiRes = await fetch(geminiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents })
+        body: JSON.stringify(requestBody)
       });
 
       if (!geminiRes.ok) {
         const errText = await geminiRes.text();
-        console.error('[Gemini Error]:', errText);
+        console.error('[Gemini Error HTTP]:', geminiRes.status, errText);
+        
+        // Intento de fallback si el modelo flash con systemInstruction necesita estructura simple
+        const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey.trim()}`;
+        const simpleRes = await fetch(fallbackUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              role: 'user',
+              parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del usuario: ${userMessage}` }]
+            }]
+          })
+        });
+
+        if (simpleRes.ok) {
+          const sData = await simpleRes.json();
+          const reply = sData.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (reply) return sendJson(res, 200, { reply, provider: 'gemini' });
+        }
+
         return sendJson(res, 502, { error: 'Error al comunicarse con Gemini.', details: errText });
       }
 
       const gData = await geminiRes.json();
-      const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text || 'Respuesta generada sin contenido.';
+      const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text || 'No se obtuvo respuesta de Gemini.';
 
       return sendJson(res, 200, { reply, provider: 'gemini' });
     } catch (err) {
       console.error('[Gemini Exception]:', err);
-      return sendJson(res, 500, { error: 'Error interno en conexión con Gemini.' });
+      return sendJson(res, 500, { error: 'Error interno en conexión con Gemini.', message: err.message });
     }
   }
 
