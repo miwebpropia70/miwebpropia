@@ -131,8 +131,11 @@
         return;
       }
       
-      // Si la API devolvió error específico (por ejemplo problema con la clave en Vercel)
+      // Si la API devolvió error específico
       console.warn('[Chatbot API Error Response]:', data);
+      if (data.details) {
+        console.error('[Detalle exacto de Google]:', data.details);
+      }
       throw new Error(data.error || `HTTP ${response.status}`);
     } catch (err) {
       console.error('[Chatbot Error, using fallback]:', err);
