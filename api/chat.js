@@ -126,19 +126,19 @@ async function handleChatRequest(req, res) {
     try {
       const cleanKey = geminiApiKey.trim();
       
-      // Lista de modelos oficiales disponibles en Google AI Studio por orden de preferencia
-      const modelsToTry = [
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash',
-        'gemini-2.0-flash',
-        'gemini-1.5-pro'
+      // En v1beta los nombres válidos son gemini-2.5-flash, gemini-2.0-flash o gemini-1.5-flash
+      // Además añadimos la API v1 estándar que es la más compatible
+      const endpointsToTry = [
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${cleanKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${cleanKey}`
       ];
 
       let lastErrorText = '';
 
-      for (const modelName of modelsToTry) {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${cleanKey}`;
-        
+      for (const geminiUrl of endpointsToTry) {
         try {
           const geminiRes = await fetch(geminiUrl, {
             method: 'POST',
@@ -147,11 +147,7 @@ async function handleChatRequest(req, res) {
               contents: [{
                 role: 'user',
                 parts: [{ text: `${SYSTEM_PROMPT}\n\nPregunta del cliente: ${userMessage}` }]
-              }],
-              generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 600
-              }
+              }]
             })
           });
 
@@ -159,18 +155,16 @@ async function handleChatRequest(req, res) {
             const gData = await geminiRes.json();
             const reply = gData.candidates?.[0]?.content?.parts?.[0]?.text;
             if (reply) {
-              return sendJson(res, 200, { reply, provider: 'gemini', model: modelName });
+              return sendJson(res, 200, { reply, provider: 'gemini' });
             }
           } else {
             lastErrorText = await geminiRes.text();
-            console.error(`[Gemini ${modelName} Error HTTP ${geminiRes.status}]:`, lastErrorText);
           }
         } catch (fetchErr) {
           lastErrorText = fetchErr.message;
         }
       }
 
-      // Si todos los modelos fallaron con la clave proporcionada
       return sendJson(res, 502, { 
         error: 'Google Gemini rechazó la petición.', 
         details: lastErrorText 
